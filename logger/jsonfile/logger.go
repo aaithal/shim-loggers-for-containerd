@@ -8,6 +8,8 @@ package jsonfile
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/containerd/containerd/runtime/v2/logging"
 	dockerlogger "github.com/docker/docker/daemon/logger"
@@ -22,8 +24,8 @@ const (
 	// DriverName is the name of the json-file log driver.
 	DriverName = "json-file"
 
-	// LogPathKey specifies the per-container output file path. The directory must already
-	// exist on the host; the shim-logger does not create it.
+	// LogPathKey specifies the per-container output file path. The shim-logger creates
+	// the parent directory if it does not exist.
 	LogPathKey = "log-path"
 
 	// MaxSizeKey is the maximum size of the log file before it is rolled (e.g., "10m").
@@ -128,6 +130,18 @@ func (la *LoggerArgs) RunLogDriver(ctx context.Context, config *logging.Config, 
 		logger.WithConfig(loggerConfig),
 		logger.WithLogPath(la.args.LogPath),
 	)
+
+	// Create the per-container log directory if it does not exist. On ECS
+	// Managed Instances the parent directory (/var/log/ecs/json-file/) is
+	// provisioned by the AMI with a setgid bit (mode 2750, group
+	// JSON_FILE_GID), so subdirectories created here inherit the group
+	// automatically, enabling non-root daemon containers to read log output.
+	if dir := filepath.Dir(la.args.LogPath); dir != "" {
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			debug.ErrLogger = fmt.Errorf("unable to create log directory %s: %w", dir, err)
+			return debug.ErrLogger
+		}
+	}
 
 	stream, err := dockerjsonfilelog.New(*info)
 	if err != nil {
